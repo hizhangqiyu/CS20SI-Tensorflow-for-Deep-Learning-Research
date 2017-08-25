@@ -10,6 +10,7 @@ from tensorflow.contrib.tensorboard.plugins import projector
 
 # global variables
 data_name = "data/text/text8.zip"
+WORK_DIR = os.path.abspath(os.curdir)
 VOCAB_SIZE = 50000
 BATCH_SIZE = 128
 EMBED_SIZE = 128
@@ -203,6 +204,7 @@ class SkipGramModel:
                                 log_str = "%s %s," % (log_str, close_word)
                             print(log_str)
 
+            # generate data for tensorboard.
             final_embed_matrix = sess.run(self.embed_matrix)
 
             embedding_var = tf.Variable(final_embed_matrix[:500], name='embedding')
@@ -214,10 +216,12 @@ class SkipGramModel:
             embedding = config.embeddings.add()
             embedding.tensor_name = embedding_var.name
 
-            #embedding.metadata_path = './graph/word2vec/vocab_500.tsv'
-            embedding.metadata_path = './vocab_500.tsv'
+            embedding.metadata_path = os.path.join(WORK_DIR,'./graph/word2vec/vocab_500.tsv')
 
+            # generate projector_config.pbtxt, it will be loaded by tensorboard for visualization.
             projector.visualize_embeddings(summary_writer, config)
+
+            # only save embedding_var.
             saver_embed = tf.train.Saver([embedding_var])
             saver_embed.save(sess, './graph/word2vec/skip-gram.ckpt', 1)
 
