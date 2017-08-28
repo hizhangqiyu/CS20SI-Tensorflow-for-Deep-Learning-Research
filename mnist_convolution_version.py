@@ -1,149 +1,124 @@
+from __future__ import absolute_import
 from __future__ import division
-import os
-import numpy as np
-import tensorflow as tf
+from __future__ import print_function
+
+import sys
+
 from tensorflow.examples.tutorials.mnist import input_data
 
-WORK_DIR = os.path.abspath(os.curdir)
-LEARNING_RATE = 0.01
-BATCH_SIZE = 128
-N_EPOCHS = 20000
+import tensorflow as tf
 
-class MnistConvnet:
-    def __init__(self, learning_rate, batch_size, n_epochs, data_path="./data/mnist"):
-        self.learning_rate = 0.01
-        self.batch_size = 128
-        self.n_epochs = 25
-        self.data = input_data.read_data_sets(os.path.join(WORK_DIR, data_path), one_hot=True)
-        self.global_step = tf.Variable(0, dtype=tf.int32, trainable=False, name='global_step')
+def deepnn(x):
 
-    def _create_placeholder(self, batch_size):
-        X = tf.placeholder(tf.float32, [batch_size, 784], name="input")
-        Y = tf.placeholder(tf.float32, [batch_size, 10], name="lables")
-        return X, Y 
+  with tf.name_scope('reshape'):
+    x_image = tf.reshape(x, [-1, 28, 28, 1])
 
-    # input shape defaults to NHWC(batch_size, height, width, channel)
-    # kernel shape defaults to (height, width, input_channel, output_channel)
-    def _create_filter_layer(self, layer_name, input_layer, kernel_shape, bias_shape, stride_shape=[1, 1, 1, 1], padding='SAME'):
-        with tf.variable_scope(layer_name) as scope:
-            k = tf.get_variable('kernel', kernel_shape)
-            b = tf.get_variable('biases', bias_shape, initializer=tf.random_normal_initializer())
-            conv = tf.nn.conv2d(input_layer, k, strides=stride_shape, padding=padding)
-            return tf.nn.relu(conv + b, name=scope.name)
+  # First convolutional layer - maps one grayscale image to 32 feature maps.
+  with tf.name_scope('conv1'):
+    W_conv1 = weight_variable([5, 5, 1, 32])
+    b_conv1 = bias_variable([32])
+    h_conv1 = tf.nn.relu(conv2d(x_image, W_conv1) + b_conv1)
 
-    def _create_pool_layer(self, layer_name, input_layer, ksize, stride_shape=[1, 2, 2, 1], padding='SAME'):
-        with tf.variable_scope(layer_name) as scope:
-            return tf.nn.max_pool(input_layer, ksize=ksize, strides=stride_shape, padding=padding)
+  # Pooling layer - downsamples by 2X.
+  with tf.name_scope('pool1'):
+    h_pool1 = max_pool_2x2(h_conv1)
 
-    def _create_fc_layer(self, layer_name, input_layer, weight_shape, bias_shape):
-        with tf.variable_scope(layer_name) as scope:
-            w = tf.get_variable('weights', weight_shape, initializer=tf.truncated_normal_initializer())
-            b = tf.get_variable('biases', bias_shape, initializer=tf.constant_initializer(0.0))
+  # Second convolutional layer -- maps 32 feature maps to 64.
+  with tf.name_scope('conv2'):
+    W_conv2 = weight_variable([5, 5, 32, 64])
+    b_conv2 = bias_variable([64])
+    h_conv2 = tf.nn.relu(conv2d(h_pool1, W_conv2) + b_conv2)
 
-            return tf.nn.relu(tf.matmul(input_layer, w) + b, name='relu')
+  # Second pooling layer.
+  with tf.name_scope('pool2'):
+    h_pool2 = max_pool_2x2(h_conv2)
 
-    def _create_dropout(self, input_layer):
-        keep_prob = tf.placeholder(tf.float32)
-        dropout = tf.nn.dropout(input_layer, keep_prob)
-        return keep_prob, dropout
+  # Fully connected layer 1 -- after 2 round of downsampling, our 28x28 image
+  # is down to 7x7x64 feature maps -- maps this to 1024 features.
+  with tf.name_scope('fc1'):
+    W_fc1 = weight_variable([7 * 7 * 64, 1024])
+    b_fc1 = bias_variable([1024])
 
-    def _create_softmax(self, input_layer, layer_name='softmax'):
-        with tf.variable_scope(layer_name) as scope:
-            w = tf.get_variable('weights', [1024, 10], initializer=tf.truncated_normal_initializer())
-            b = tf.get_variable('biases', [10], initializer=tf.random_normal_initializer())
-            return tf.matmul(input_layer, w) + b
+    h_pool2_flat = tf.reshape(h_pool2, [-1, 7*7*64])
+    h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, W_fc1) + b_fc1)
 
-    def _create_loss(self, logits, labels):
-        entropy = tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels)
-        return tf.reduce_mean(entropy)
+  # Dropout - controls the complexity of the model, prevents co-adaptation of
+  # features.
+  with tf.name_scope('dropout'):
+    keep_prob = tf.placeholder(tf.float32)
+    h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
 
-    def _create_summaries(self):
-        with tf.name_scope("summaries"):
-            tf.summary.scalar("learning_rate", self.learning_rate)
-            tf.summary.scalar("loss", self.loss)
-            tf.summary.histogram("histogram loss", self.loss)
-            self.summary_op = tf.summary.merge_all()
+  # Map the 1024 features to 10 classes, one for each digit
+  with tf.name_scope('fc2'):
+    W_fc2 = weight_variable([1024, 10])
+    b_fc2 = bias_variable([10])
+
+    y_conv = tf.matmul(h_fc1_drop, W_fc2) + b_fc2
+  return y_conv, keep_prob
 
 
-    def build_graph(self):
-        with tf.name_scope('data'):
-            self.X, self.Y = self._create_placeholder(self.batch_size)
-        
-        with tf.name_scope('conv1'):
-            conv1 = self._create_filter_layer(layer_name='conv1',
-                                    input_layer=tf.reshape(self.X, shape=[-1, 28, 28, 1]),
-                                    kernel_shape=[5, 5, 1, 32],
-                                    bias_shape=[32])
-        
-        with tf.name_scope('pool1'):
-            pool1 = self._create_pool_layer(layer_name='pool1', input_layer=conv1, ksize=[1, 2, 2, 1])
-
-        with tf.name_scope('conv2'):
-            conv2 = self._create_filter_layer(layer_name='conv2',
-                                    input_layer=pool1,
-                                    kernel_shape=[5, 5, 32, 64],
-                                    bias_shape=[64])
-
-        with tf.name_scope('pool2'):
-            pool2 = self._create_pool_layer(layer_name='pool2', input_layer=conv2, ksize=[1, 2, 2, 1])
-        
-        with tf.name_scope('fc1'):
-            #fc1 = self._create_fc_layer(layer_name='fc1', input_layer=tf.reshape(pool3, [-1, 7*7*64]), weight_shape=[7*7*64,1024], bias_shape=[1024])
-            fc1 = self._create_fc_layer('fc1', tf.reshape(pool3, [-1, 7*7*64]), [7*7*64,1024], [1024])
-
-        with tf.name_scope('dropout'):
-            dp = self._create_dropout('dropout', fc1)
-
-        with tf.name_scope('fc2')
-            fc2 = self._create_fc_layer(layer_name='fc2', input_layer=dp, weight_shape=[1024,10], bias_shape=[10])
-
-        self.logits = self._create_softmax(input_layer=fc)
-        self.loss = self._create_loss(logits=self.logits, labels=self.Y)
-        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate).minimize(self.loss)
-
-    def train_model(self):
-        saver = tf.train.Saver() # defaults to saving all variables
-
-        init = tf.global_variables_initializer()
-        with tf.Session() as sess:
-            sess.run(init)
-
-            train_writer = tf.summary.FileWriter("./graph/convnet_mnist", sess.graph)
-            initial_step = model.global_step.eval()
-
-            n_batches = int(self.data.train.num_examples/self.batch_size)
-            for i in range(initial_step, initial_step + self.n_epochs):
-                total_correct_preds = 0
-                for _ in range(n_batches):
-                    batch = self.data.train.next_batch(self.batch_size)
-
-                    correct_preds = tf.equal(tf.argmax(self.logits, 1), tf.argmax(batch[1], 1))
-                    accuracy = tf.reduce_sum(tf.cast(correct_preds, tf.float32))
-
-                    _, loss_r, correct_preds_r = sess.run([self.optimizer, self.loss, accuracy], feed_dict={self.X: batch[0], self.Y:batch[1]})
-                    total_correct_preds += correct_preds_r
-                writer.add_summary(summary, global_step=i)
-                print("epoch %r loss_r= %r total_correct_preds=%r accuracy=%r" % (i, loss_r, total_correct_preds, self.data.test.num_examples))
-            
-
-            # generate data for tensorboard.
-            final_embed_matrix = sess.run(self.embed_matrix)
-            embedding_var = tf.Variable(final_embed_matrix[:500], name='embedding')
-            sess.run(embedding_var.initializer)
-            config = projector.ProjectorConfig()
-            summary_writer = tf.summary.FileWriter('./graph/mnist')
-            embedding = config.embeddings.add()
-            embedding.tensor_name = embedding_var.name
-            embedding.metadata_path = os.path.join(WORK_DIR,'./graph/mnist/image_500.tsv')
-            projector.visualize_embeddings(summary_writer, config)
-            saver_embed = tf.train.Saver([embedding_var])
-            saver_embed.save(sess, './graph/mnist/mnist_convnet.ckpt', 1)
-
-            summary_writer.close()
-            train_writer.close()
+def conv2d(x, W):
+  """conv2d returns a 2d convolution layer with full stride."""
+  return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME')
 
 
-if __name__ == "__main__":
-    model = MnistConvnet(LEARNING_RATE, BATCH_SIZE, N_EPOCHS)
-    model.build_graph()
-    model.train_model()
+def max_pool_2x2(x):
+  """max_pool_2x2 downsamples a feature map by 2X."""
+  return tf.nn.max_pool(x, ksize=[1, 2, 2, 1],
+                        strides=[1, 2, 2, 1], padding='SAME')
+
+
+def weight_variable(shape):
+  """weight_variable generates a weight variable of a given shape."""
+  initial = tf.truncated_normal(shape, stddev=0.1)
+  return tf.Variable(initial)
+
+
+def bias_variable(shape):
+  """bias_variable generates a bias variable of a given shape."""
+  initial = tf.constant(0.1, shape=shape)
+  return tf.Variable(initial)
+
+
+def main():
+  # Import data
+  mnist = input_data.read_data_sets('./data/mnist', one_hot=True)
+
+  # Create the model
+  x = tf.placeholder(tf.float32, [None, 784])
+
+  # Define loss and optimizer
+  y_ = tf.placeholder(tf.float32, [None, 10])
+
+  # Build the graph for the deep net
+  y_conv, keep_prob = deepnn(x)
+
+  with tf.name_scope('loss'):
+    cross_entropy = tf.nn.softmax_cross_entropy_with_logits(labels=y_,
+                                                            logits=y_conv)
+  cross_entropy = tf.reduce_mean(cross_entropy)
+
+  with tf.name_scope('adam_optimizer'):
+    train_step = tf.train.AdamOptimizer(1e-4).minimize(cross_entropy)
+
+  with tf.name_scope('accuracy'):
+    correct_prediction = tf.equal(tf.argmax(y_conv, 1), tf.argmax(y_, 1))
+    correct_prediction = tf.cast(correct_prediction, tf.float32)
+  accuracy = tf.reduce_mean(correct_prediction)
+
+  with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+    for i in range(20000):
+      batch = mnist.train.next_batch(50)
+      if i % 100 == 0:
+        train_accuracy = accuracy.eval(feed_dict={
+            x: batch[0], y_: batch[1], keep_prob: 1.0})
+        print('step %d, training accuracy %g' % (i, train_accuracy))
+      train_step.run(feed_dict={x: batch[0], y_: batch[1], keep_prob: 0.5})
+
+    print('test accuracy %g' % accuracy.eval(feed_dict={
+        x: mnist.test.images, y_: mnist.test.labels, keep_prob: 1.0}))
+
+if __name__ == '__main__':
+
+  main()
